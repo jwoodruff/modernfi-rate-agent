@@ -19,11 +19,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World!"}
-
-
 @app.get("/health")
 async def health_check():
     """Liveness/readiness check for the ALB — confirms the app can actually
