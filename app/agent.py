@@ -11,6 +11,7 @@ from app.tools import call_tool, tools
 
 logger = logging.getLogger("uvicorn")
 client = AsyncAnthropic()
+anthropic_model = os.environ["ANTHROPIC_MODEL"]
 
 SYSTEM_PROMPT = (
     "You are a rate lookup assistant for ModernFi. You answer questions about "
@@ -65,7 +66,7 @@ async def run_agent(question: str) -> AgentResult:
 
         try:
             response = await client.messages.create(
-                model=os.environ["ANTHROPIC_MODEL"],
+                model=anthropic_model,
                 max_tokens=1024,
                 system=SYSTEM_PROMPT,
                 tools=tools,

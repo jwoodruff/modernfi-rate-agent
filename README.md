@@ -165,6 +165,31 @@ and lets Claude chain the two tools autonomously, including in parallel when
 a question needs several series at once (e.g. "what are current interest
 rates" fans out to mortgage, fed funds, and treasury yields in one turn).
 
+**Claude Haiku 4.5 as the model, injected via config rather than
+hardcoded.** This service's actual reasoning load is narrow — parse a
+question, decide which of two tools to call (if any), and turn a numeric
+FRED observation into a plain-English sentence. That's tool selection and
+light synthesis, not open-ended reasoning, so a smaller, faster, cheaper
+model handles it reliably once the tool descriptions and system prompt do
+the heavy lifting. It matters more here than usual because each `/ask` call
+can cost 2–3 sequential Claude round trips (search → fetch → answer) —
+Haiku's lower per-token cost and lower latency compound across that whole
+loop, directly improving both the observed 5–12s response time and the
+per-request dollar cost of a service where every call is billed API usage.
+The model string is never hardcoded in application code: `agent.py` reads
+it from `os.environ["ANTHROPIC_MODEL"]` once, at import time, into a
+module-level constant — not per-request — which is set locally via `.env`
+and in production via a plain Pulumi config value (`anthropicModel`)
+injected as a task-definition environment variable, not a secret, since a
+model name isn't sensitive. Reading it once at startup rather than on every
+call also means a missing/misconfigured `ANTHROPIC_MODEL` fails loudly when
+the container starts, instead of surfacing as an unhandled `500` on
+whichever request happens to hit `/ask` first. Swapping models (a newer
+Haiku point release, or dialing up to Sonnet if accuracy on harder
+questions became a priority) is still just a one-line `pulumi config set
+anthropicModel <model>` + `pulumi up`, with no application code change and
+no new Docker image to build.
+
 **Postgres over SQLite.** SQLite would have been faster to stand up locally
 and technically sufficient for a single-table take-home. Postgres is what
 you'd actually reach for in production — proper concurrent write handling,
