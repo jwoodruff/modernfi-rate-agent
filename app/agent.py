@@ -4,13 +4,13 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from anthropic import Anthropic, APIError
+from anthropic import AsyncAnthropic, APIError
 from anthropic.types import MessageParam, ToolResultBlockParam
 
 from app.tools import call_tool, tools
 
 logger = logging.getLogger("uvicorn")
-client = Anthropic()
+client = AsyncAnthropic()
 
 SYSTEM_PROMPT = (
     "You are a rate lookup assistant for ModernFi. You answer questions about "
@@ -41,7 +41,7 @@ class AgentResult:
     error_message: str | None = None
 
 
-def run_agent(question: str) -> AgentResult:
+async def run_agent(question: str) -> AgentResult:
     """Run the Claude tool-use loop for a single question: call Claude,
     dispatch any requested tool calls, feed results back, and repeat until
     Claude produces a final text answer or MAX_ITERATIONS is hit.
@@ -64,7 +64,7 @@ def run_agent(question: str) -> AgentResult:
         api_start = time.perf_counter()
 
         try:
-            response = client.messages.create(
+            response = await client.messages.create(
                 model=os.environ["ANTHROPIC_MODEL"],
                 max_tokens=1024,
                 system=SYSTEM_PROMPT,
@@ -109,7 +109,7 @@ def run_agent(question: str) -> AgentResult:
             tool_call_count += 1
             tools_used.append(block.name)
             tool_start = time.perf_counter()
-            result = call_tool(block.name, block.input)
+            result = await call_tool(block.name, block.input)
             tool_elapsed = time.perf_counter() - tool_start
             total_tool_time += tool_elapsed
             logger.info(

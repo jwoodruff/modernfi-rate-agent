@@ -59,7 +59,7 @@ async def get_history(
 
 @app.post("/ask")
 async def ask_question(question: QuestionRequest):
-    result = run_agent(question.question)
+    result = await run_agent(question.question)
 
     await db.save_query(
         question=question.question,

@@ -3,7 +3,7 @@ import os
 import httpx
 
 
-def get_fred_data(
+async def get_fred_data(
     series_id: str,
     observation_start: str | None = None,
     observation_end: str | None = None,
@@ -27,11 +27,12 @@ def get_fred_data(
         params["limit"] = 1
 
     try:
-        response = httpx.get(
-            "https://api.stlouisfed.org/fred/series/observations",
-            params=params,
-            timeout=10.0,
-        )
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params=params,
+                timeout=10.0,
+            )
         response.raise_for_status()
     except httpx.TimeoutException:
         return {"error": f"FRED API timed out fetching data for '{series_id}'"}
@@ -68,18 +69,19 @@ def get_fred_data(
     return {"date": latest["date"], "value": latest["value"]}
 
 
-def search_fred_series(search_text: str) -> dict | list:
+async def search_fred_series(search_text: str) -> dict | list:
     try:
-        response = httpx.get(
-            "https://api.stlouisfed.org/fred/series/search",
-            params={
-                "search_text": search_text,
-                "api_key": os.environ.get("FRED_API_KEY"),
-                "file_type": "json",
-                "limit": 5,
-            },
-            timeout=10.0,
-        )
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.stlouisfed.org/fred/series/search",
+                params={
+                    "search_text": search_text,
+                    "api_key": os.environ.get("FRED_API_KEY"),
+                    "file_type": "json",
+                    "limit": 5,
+                },
+                timeout=10.0,
+            )
         response.raise_for_status()
     except httpx.TimeoutException:
         return {"error": f"FRED API timed out searching for '{search_text}'"}

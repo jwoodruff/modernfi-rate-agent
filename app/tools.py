@@ -80,14 +80,14 @@ tools: list[ToolParam] = [
 ]
 
 
-def call_tool(name: str, tool_input: dict[str, object]) -> dict | list:
+async def call_tool(name: str, tool_input: dict[str, object]) -> dict | list:
     """Dispatch a tool call by name, validating and casting the untyped
     tool_input dict into the specific argument types each function expects."""
     if name == "search_fred_series":
         search_text = tool_input.get("search_text")
         if not isinstance(search_text, str):
             return {"error": "search_fred_series requires a string 'search_text'"}
-        return search_fred_series(search_text)
+        return await search_fred_series(search_text)
 
     if name == "get_fred_data":
         series_id = tool_input.get("series_id")
@@ -102,6 +102,6 @@ def call_tool(name: str, tool_input: dict[str, object]) -> dict | list:
         if observation_end is not None and not isinstance(observation_end, str):
             return {"error": "observation_end must be a string in YYYY-MM-DD format"}
 
-        return get_fred_data(series_id, observation_start, observation_end)
+        return await get_fred_data(series_id, observation_start, observation_end)
 
     return {"error": f"Unknown tool: {name}"}

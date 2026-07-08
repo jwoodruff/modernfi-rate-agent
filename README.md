@@ -106,7 +106,7 @@ history of every question and answer.
 ```
 modernfi-rate-agent/
 ├── app/
-│   ├── main.py       # FastAPI app + routes only (/, /health, /history, /ask)
+│   ├── main.py       # FastAPI app + routes only (/health, /history, /ask)
 │   ├── agent.py       # Claude client, system prompt, the tool-use loop
 │   ├── tools.py        # tool JSON schemas + call_tool dispatcher
 │   ├── fred.py          # FRED API client (search_fred_series, get_fred_data)
@@ -138,9 +138,13 @@ like something a teammate already wrote rather than a foreign artifact.
 FastAPI is async-native, which matters here — the agent loop spends most of
 its wall-clock time waiting on network I/O (Claude, FRED, Postgres), and
 `async`/`await` lets the event loop handle other requests during those waits
-instead of blocking a thread per request. Auto-generated OpenAPI docs at
-`/docs` are a free byproduct, useful for anyone exploring the API without
-reading this README first.
+instead of blocking a thread per request. Concretely: `agent.py` uses
+Anthropic's async client (`AsyncAnthropic`) and `fred.py` uses
+`httpx.AsyncClient`, so a slow Claude or FRED call never blocks other
+in-flight requests — like a concurrent `/ask` or an ALB `/health` poll — on
+the same worker. Auto-generated OpenAPI docs at `/docs` are a free
+byproduct, useful for anyone exploring the API without reading this README
+first.
 
 **FRED API over scraping treasury.gov or the Fed's site.** FRED is a clean,
 documented, stable REST API maintained specifically for this kind of
