@@ -67,10 +67,14 @@ history of every question and answer.
 
 1. The user's question is sent to Claude along with two tool definitions:
    `search_fred_series` and `get_fred_data`.
-2. Claude decides whether it needs live data (almost always, for this
-   service) and, if so, calls `search_fred_series` first to resolve a
-   plain-language question ("30-year mortgage rate") to a FRED series ID
-   (`MORTGAGE30US`).
+2. For almost any in-scope question — current or historical — Claude calls
+   `search_fred_series` first to resolve a plain-language question
+   ("30-year mortgage rate") to a FRED series ID (`MORTGAGE30US`); the
+   system prompt directs it to prefer live data over its own training
+   knowledge, since rates change often. The only cases that skip tool
+   calls entirely are questions clearly outside scope (e.g. off-topic
+   requests, which the system prompt directs Claude to decline and
+   redirect) or input too unclear to act on.
 3. Claude then calls `get_fred_data` with that series ID to fetch the actual
    value — either the latest observation, or a historical range if the
    question references a specific date/period.
@@ -438,3 +442,15 @@ bug and the empty-string 500 described earlier in this README's history.
   (`dev`). A `staging`/`prod` split — via `Pulumi.staging.yaml` /
   `Pulumi.prod.yaml` with per-stack config (instance sizes, secrets) —
   would be the natural next step before this served real traffic.
+- **ALFRED (vintage/point-in-time data) support.** FRED only ever returns
+  the latest revised value for a series — but many economic indicators
+  (unemployment, GDP, CPI) get revised after their initial release. FRED's
+  sibling API, ALFRED (ArchivaL Federal Reserve Economic Data), exposes the
+  data *as it was originally published* at any given point in time. This
+  matters for historical questions specifically: "what was the unemployment
+  rate in July 1960" is ambiguous between "the originally reported figure"
+  and "the figure as revised today," and right now `get_fred_data` always
+  returns the latter. Adding a third tool (or an optional parameter on
+  `get_fred_data`) backed by ALFRED's `vintage_dates` parameter would let
+  Claude distinguish between these when a question calls for it, and would
+  be a natural, on-brand extension for a service already built around FRED.
