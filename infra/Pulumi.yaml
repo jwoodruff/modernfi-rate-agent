@@ -1,0 +1,11 @@
+name: modernfi-rate-agent
+description: Infrastructure for the ModernFi rate agent service
+runtime:
+  name: python
+  options:
+    toolchain: pip
+    virtualenv: venv
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: aws-python

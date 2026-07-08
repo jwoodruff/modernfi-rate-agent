@@ -1,0 +1,10 @@
+encryptionsalt: v1:R8kFDdQDbvk=:v1:Cs/Zz9R4h8AEk6wB:W2fw1jc6sATcSEqAXDOiQJ6yQriSeA==
+config:
+  aws:region: us-west-2
+  modernfi-rate-agent:fredApiKey:
+    secure: v1:4tIcQNG2taEvtUfP:jv+/5ic3Yuqr+85Xj9pd6fvG6NmgOHLckoqZTlgjv6vGeHdyvz9xZr2a8Ru7gB71
+  modernfi-rate-agent:anthropicApiKey:
+    secure: v1:I/A8rofZVl1Tsw59:1Jv+q8QdLJuWauEmLtt5dYLJmLwYrhf7nY3gZ1pQxDx80ZJLdEUo9CfkBzjNBK1Vhzcs3Cd3KKktn+TBNSdBjWcs7vByOppTfHwbYsrdW94uPx32zUNIQF0Qjc4P2owW7Z6ZAHtPuE/70PY1G/V69+gH3Qbgcjhihn43uw==
+  modernfi-rate-agent:anthropicModel: claude-haiku-4-5-20251001
+  modernfi-rate-agent:dbPassword:
+    secure: v1:1uJkjiwWHdE969H4:R8vtHjFqAKnzL5VfAJOTIdbxe9iGa8nLcHwWPP8QpMN8apQI
