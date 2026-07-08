@@ -503,8 +503,12 @@ the current directory) and isn't wired into CI.
 - **Real migration tooling (Alembic).** The current `CREATE TABLE IF NOT
   EXISTS` approach is intentionally simple and self-bootstrapping, but it
   can't evolve an existing schema — adding a column later would require a
-  manual `ALTER TABLE` outside this code path. Alembic (or similar) would
-  give a proper versioned migration history instead.
+  manual `ALTER TABLE` outside this code path. It also isn't fully
+  race-safe under concurrent startups — two ECS tasks launching at the same
+  instant (e.g. during a `desired_count > 1` deploy) could both attempt the
+  DDL simultaneously. Neither is a problem yet at `desired_count=1`, but
+  Alembic (or similar) would give a proper versioned migration history and
+  remove both issues before scaling out.
 - **Multi-environment support.** Right now there's a single Pulumi stack
   (`dev`). A `staging`/`prod` split — via `Pulumi.staging.yaml` /
   `Pulumi.prod.yaml` with per-stack config (instance sizes, secrets) —
@@ -521,3 +525,63 @@ the current directory) and isn't wired into CI.
   `get_fred_data`) backed by ALFRED's `vintage_dates` parameter would let
   Claude distinguish between these when a question calls for it, and would
   be a natural, on-brand extension for a service already built around FRED.
+- **Hardcoded shortcuts for common series.** `search_fred_series` costs a
+  full Claude + HTTP round trip even for well-known, static IDs — "what's
+  the fed funds rate" doesn't need a search when `FEDFUNDS` never changes.
+  A small map of ~10–20 common terms → series IDs, with `search_fred_series`
+  as the fallback for anything not in the map, would cut a full round trip
+  off the most common questions without giving up the general-purpose case.
+- **Concurrent tool execution within a turn.** When Claude requests
+  multiple tools in one turn (e.g. "what are current interest rates"
+  fanning out to several series), `agent.py` still `await`s them one at a
+  time in a plain `for` loop. Since every result gets batched into a single
+  message regardless of completion order, `asyncio.gather` would let them
+  run concurrently with no other change to the loop's structure.
+- **`is_error` on failed tool results.** The Messages API supports flagging
+  a `tool_result` as a failure explicitly (`is_error: true`); this app
+  relies entirely on Claude inferring failure from the shape of the JSON
+  (`{"error": "..."}`). Setting `is_error=True` whenever a tool call
+  returns an error dict would use the mechanism built for this instead of
+  leaving it to inference.
+- **Persisting `response.stop_reason`.** Today, `max_tokens` (a truncated
+  answer) and `refusal` (a declined answer) both fall through the same
+  code path as a clean `end_turn` and get recorded as `status="success"` —
+  there's no way to tell them apart later via `/history`. Storing the
+  actual `stop_reason` on the final iteration would make that distinction
+  queryable.
+- **ECS redundancy.** `desired_count=1` and a single NAT gateway
+  (`NatGatewayStrategy.SINGLE`) are both real single points of failure that
+  keep the AWS bill down but aren't called out anywhere as tradeoffs.
+  Bumping `desired_count` (with target-tracking autoscaling on top) and
+  moving to a per-AZ NAT strategy would be the next steps before this
+  served real traffic.
+- **SSM Parameter Store instead of Secrets Manager.** None of the three
+  secrets here use Secrets Manager's automatic rotation — its main
+  differentiator and cost driver over the alternative. SSM Parameter Store
+  `SecureString` parameters give the same "never in plaintext in the task
+  definition" property at no additional per-secret cost for anything that
+  isn't being rotated.
+- **Auth on `/ask` itself.** There's currently no authentication in front
+  of `/ask` — anyone who can reach the ALB can trigger a real, billed
+  Claude + FRED call. An API key (even a simple shared-secret header
+  checked in `main.py`) would close this gap before rate limiting alone
+  would — rate limiting slows down abuse, it doesn't require the caller to
+  be authorized at all.
+- **Streaming responses.** Claude's Messages API supports server-sent-event
+  streaming; given the observed 5–12s response times, streaming partial
+  text back to the caller as it's generated (rather than waiting for the
+  entire multi-iteration loop to finish) would meaningfully improve
+  perceived latency even though total time wouldn't change.
+- **Multi-turn conversations.** Every `/ask` today starts a brand-new,
+  memoryless conversation — there's no way to ask a natural follow-up
+  ("what about the 15-year rate?") without repeating the whole question.
+  Supporting this would mean accepting an optional conversation/session ID,
+  persisting the growing `messages` list per session in Postgres instead of
+  discarding it at the end of `run_agent`, and replaying it on the next
+  request in that session.
+- **Retry/backoff on FRED calls.** `fred.py` gives up after a single
+  attempt on a timeout or 5xx and returns an error straight to Claude. A
+  transient network blip currently degrades all the way to "I couldn't
+  retrieve that" instead of a quick, cheap retry — a short exponential
+  backoff (2–3 attempts) before falling back to the current error-as-data
+  behavior would absorb most of those blips.

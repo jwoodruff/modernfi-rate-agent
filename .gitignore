@@ -12,3 +12,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Personal notes taken
+STUDY_GUIDE.md
