@@ -9,5 +9,5 @@ __pycache__/
 Dockerfile
 docker-compose.yml
 init_db/
-test_agent.py
+test_*.py
 *.md

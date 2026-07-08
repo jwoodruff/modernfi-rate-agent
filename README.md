@@ -116,6 +116,8 @@ modernfi-rate-agent/
 │   └── __main__.py         # Pulumi program (VPC, RDS, ECS/Fargate, ALB, secrets)
 ├── init_db/
 │   └── 001_create_tables.sql
+├── test_agent.py           # manual smoke-test script (see §7)
+├── test_error_handling.py  # manual API-failure drill (see §7)
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
@@ -208,6 +210,17 @@ Manager, and ECS resolves the actual value only at container start —
 the secret itself never appears in the task definition JSON. Locally,
 the same secrets live in a gitignored `.env` file rather than in code or
 Docker Compose directly, for the same reason at a smaller scale.
+
+**No prompt caching (for now).** Anthropic's prompt caching keys off a
+prefix (`tools` → `system` → `messages`) and would in principle fit
+`agent.py`'s tool-use loop, which resends the same system prompt and tool
+schemas on every iteration. It's skipped here because the combined
+`SYSTEM_PROMPT` + tool schemas come to roughly 600-700 tokens, well under
+Haiku 4.5's 2048-token minimum cacheable prefix — a `cache_control` marker
+below that minimum is a silent no-op (no error, `cache_read_input_tokens`
+just stays 0), so adding it today wouldn't do anything. It'd be worth
+revisiting if the tool set or system prompt grows significantly, or if the
+model changes to one with a lower minimum (Sonnet's is 1024 tokens).
 
 ## 4. Running Locally
 
@@ -405,6 +418,31 @@ it doesn't run in CI and doesn't assert anything strictly (it prints
 warnings, it doesn't fail loudly) — but it's what was actually used
 throughout development to catch regressions like the parallel-tool-call
 bug and the empty-string 500 described earlier in this README's history.
+
+`test_error_handling.py` (project root) exercises the one failure path
+`test_agent.py` can't reach without manual intervention: what happens when
+the Anthropic API call itself fails (invalid/expired key, outage, etc.),
+which should surface as a `503` from `/ask` with `status='error'` written
+to history, while `/health` stays `200` since it only checks Postgres.
+Rather than asking you to hand-edit `.env` and restart the container
+yourself, the script automates the whole drill:
+
+```bash
+python test_error_handling.py
+```
+
+It backs up your real `.env`, swaps in an obviously-invalid
+`ANTHROPIC_API_KEY`, force-recreates the `app` container via `docker
+compose` so it picks up the bad key, waits for `/health` to come back up,
+then runs the same checks as `test_agent.py --error-handling` (confirms
+`/ask` returns `503`, confirms the most recent `/history` row shows
+`status='error'`, confirms `/health` is still `200`). A `finally` block
+always restores your real `.env` and recreates the container again
+afterward — even on a failed assertion or a Ctrl+C partway through — so a
+run can't accidentally leave your local app stuck on a fake key. Like
+`test_agent.py`, this requires the app already running via `docker compose`
+(it assumes a service named `app` in `docker-compose.yml` and a `.env` in
+the current directory) and isn't wired into CI.
 
 ## 8. What I'd Do With More Time
 
