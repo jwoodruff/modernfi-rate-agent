@@ -14,6 +14,14 @@ on:
   push:
     branches: [main]
 
+# One deploy against this stack at a time, queued in order rather than
+# canceled — an in-progress `pulumi up` shouldn't get killed mid-apply,
+# since that can leave infrastructure partially changed. Same group key on
+# every run (there's only one stack), so a second merge landing while the
+# first is still deploying waits for it instead of running concurrently.
+concurrency:
+  group: pulumi-deploy-${{ vars.PULUMI_STACK }}
+
 permissions:
   id-token: write # required to mint the OIDC token for AWS
   contents: read
