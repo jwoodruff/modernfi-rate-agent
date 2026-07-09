@@ -184,10 +184,10 @@ The model string is never hardcoded. `agent.py` reads it from
 constant — not per request. Locally it's set via `.env`; in production,
 via a plain Pulumi config value (`anthropicModel`) injected as a
 task-definition environment variable, not a secret, since a model name
-isn't sensitive. Reading it once at startup rather than on every call has
-a real payoff: a missing or misconfigured `ANTHROPIC_MODEL` fails loudly
-when the container starts, instead of surfacing as an unhandled `500` on
-whichever request happens to hit `/ask` first. Swapping models — a newer
+isn't sensitive. Reading it once at startup rather than on every call
+means a missing or misconfigured `ANTHROPIC_MODEL` fails loudly when the
+container starts, instead of surfacing as an unhandled `500` on whichever
+request happens to hit `/ask` first. Swapping models — a newer
 Haiku point release, or dialing up to Sonnet if harder questions start
 needing it — is still just a `pulumi config set anthropicModel <model>`
 and a `pulumi up`. No code change, no new Docker image.
@@ -213,25 +213,22 @@ real joins, would push me back toward an ORM or query builder.
 
 **ECS Fargate over EKS (or raw EC2).** A single containerized service with
 one moving part to run — Fargate is the right-sized tool for that.
-Kubernetes/EKS brings real power: custom scheduling, complex multi-service
-topologies, a large ecosystem. It also brings real operational overhead —
-cluster upgrades, node group management, a control plane to reason about
-— none of which this service needs yet. Fargate gives "run this
-container, don't make me manage servers" with a much smaller surface
-area. Migrating to EKS later, if the platform actually grows into needing
-it, is a real path, not something this decision forecloses.
+Kubernetes/EKS brings custom scheduling, complex multi-service topologies,
+a large ecosystem — and cluster upgrades, node group management, a
+control plane to reason about, none of which this service needs yet.
+Fargate gives "run this container, don't make me manage servers" with a
+much smaller surface area. Migrating to EKS later, if the platform grows
+into needing it, is tractable — this decision doesn't foreclose it.
 
 **Pulumi over Terraform/CloudFormation/hand-written YAML.** Infrastructure
-as actual code — Python, here — means real control flow, real functions,
-real type-checking. That's not theoretical: Pylance caught a real API
-mismatch (a nested, misnamed `pulumi_awsx` type) before it became a
-failed `pulumi up`. It also means this infra can share tooling and
-conventions with the application code, rather than living in a separate
-declarative dialect. The tradeoff: Pulumi's Python SDK surface is less
-exhaustively documented than Terraform's in places, and its `Output`/
-`apply` model for handling values not known until deploy time has a real
-learning curve. Worth it here for writing infra in the same language as
-the app.
+as actual code — Python, here — means control flow, functions, and a type
+checker in the loop instead of a separate declarative dialect the editor
+can't reason about. It also means this infra shares tooling and
+conventions with the application code. The tradeoff: Pulumi's Python SDK
+surface is less exhaustively documented than Terraform's in places, and
+its `Output`/`apply` model for handling values not known until deploy
+time takes some getting used to. Worth it here for writing infra in the
+same language as the app.
 
 **Secrets Manager for API keys and the database URL, not plaintext
 environment variables.** ECS task definitions are visible in the console
@@ -393,20 +390,11 @@ Both roles are assumed through GitHub's OIDC identity federation rather
 than long-lived AWS access keys sitting in GitHub secrets. GitHub mints a
 short-lived, per-workflow-run token; AWS trusts it based on claims baked
 into that token — which repo, which branch or environment — instead of a
-static credential that has to be rotated and can leak.
-
-One thing worth knowing if you're setting this up yourself: **a job that
-declares `environment:` gets a different `sub` claim than one that
-doesn't.** A plain push-triggered job gets
-`repo:<owner>/<repo>:ref:refs/heads/main`; a job with `environment:
-production` attached gets `repo:<owner>/<repo>:environment:production`
-instead — the environment name *replaces* the branch ref, it doesn't get
-appended alongside it. The deploy role's trust policy in
-`infra/__main__.py` had to be scoped to the environment claim, not the
-ref, or every deploy fails at the "Configure AWS credentials" step with
-`Not authorized to perform sts:AssumeRoleWithWebIdentity`. That's exactly
-what happened the first time this pipeline ran, and exactly why the trust
-condition looks the way it does now.
+static credential that has to be rotated and can leak. The preview role's
+trust condition matches on the repo and branch; the deploy role's matches
+on the repo and the `production` environment name specifically, since
+that job declares `environment: production` and GitHub scopes the token's
+claims to the environment once a job attaches one.
 
 ### One-time setup
 
@@ -422,9 +410,7 @@ authenticate in the first place.
    ```bash
    cd infra
    pulumi stack export --file /tmp/dev-state.json   # back up current state first
-   pulumi login https://api.pulumi.com               # be explicit — bare `pulumi login`
-                                                        # can silently reaffirm an existing
-                                                        # local session instead of switching
+   pulumi login https://api.pulumi.com               # explicit backend URL
    pulumi stack init dev                              # or select if it already exists
    pulumi stack import --file /tmp/dev-state.json
    ```
@@ -459,9 +445,8 @@ authenticate in the first place.
 6. **Create the approval gate** (Settings → Environments → New
    environment, name it `production` — matching the `environment:
    production` key on the deploy job — then **Required reviewers** → add
-   yourself → Save protection rules). Needs a public repo or a paid plan;
-   see the `sub`-claim note above once you get to actually wiring the
-   trust policy.
+   yourself → Save protection rules). Needs a public repo, or GitHub
+   Team/Enterprise for a private one.
 7. **Require the preview check before merging.** GitHub only lets you
    select a status check once it's actually run at least once, so first
    open any PR and let `pulumi-preview.yml` run on it. Then: Settings →
@@ -551,9 +536,10 @@ It runs, in order:
 
 This isn't a substitute for the real unit/integration tests listed below.
 It doesn't run in CI, and it doesn't assert anything strictly — it prints
-warnings, it doesn't fail loudly. But it's what was actually used
-throughout development to catch regressions like the parallel-tool-call
-bug and the empty-string 500 described earlier in this README's history.
+warnings, it doesn't fail loudly. It's a fast way to catch the failure
+modes that matter most here: a multi-tool-call turn wired incorrectly,
+edge-case input (empty strings, off-topic questions, reversed date
+ranges) producing a `500` instead of a clean response.
 
 `test_error_handling.py` (project root) exercises the one failure path
 `test_agent.py` can't reach without manual intervention: what happens when
