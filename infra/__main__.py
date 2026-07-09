@@ -325,11 +325,16 @@ fargate_service = awsx.ecs.FargateService(
 #   - preview role: assumable from ANY branch/PR in this repo, read-only
 #     (`ReadOnlyAccess`) — safe to run on untrusted PRs, since it can plan
 #     but never change anything.
-#   - deploy role: assumable ONLY from a workflow run whose ref is exactly
-#     `refs/heads/main` (i.e. only after a merge), full access
-#     (`AdministratorAccess` — reasonable for this personal/sandbox
-#     account; a shared/production account should scope this down to the
-#     specific services this stack actually manages).
+#   - deploy role: assumable ONLY from a workflow run targeting the
+#     `production` GitHub environment, full access (`AdministratorAccess`
+#     — reasonable for this personal/sandbox account; a shared/production
+#     account should scope this down to the specific services this stack
+#     actually manages). Scoped on `environment:production`, not
+#     `ref:refs/heads/main`, because a job that declares `environment:` has
+#     its OIDC token's `sub` claim replaced with the environment name
+#     instead of the branch ref — matching on the ref here would silently
+#     never match once the job has an environment attached, exactly the
+#     bug this comment used to describe before it was caught.
 # ---------------------------------------------------------------------------
 github_repo = "jwoodruff/modernfi-rate-agent"
 
@@ -385,7 +390,7 @@ github_actions_deploy_role = aws.iam.Role(
     "github-actions-deploy-role",
     assume_role_policy=github_oidc_provider.arn.apply(
         lambda arn: _github_oidc_trust_policy(
-            arn, f"repo:{github_repo}:ref:refs/heads/main"
+            arn, f"repo:{github_repo}:environment:production"
         )
     ),
 )
