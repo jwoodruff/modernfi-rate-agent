@@ -1,8 +1,21 @@
 # ModernFi Rate Agent
 
+## Table of Contents
+
+- [Live Demo](#live-demo)
+- [1. Overview](#1-overview)
+- [2. Architecture](#2-architecture)
+- [3. Decisions & Tradeoffs](#3-decisions--tradeoffs)
+- [4. Running Locally](#4-running-locally)
+- [5. Deploying to AWS](#5-deploying-to-aws)
+- [6. Continuous Deployment (GitHub Actions)](#6-continuous-deployment-github-actions)
+- [7. API Reference](#7-api-reference)
+- [8. Manual Sanity Testing](#8-manual-sanity-testing)
+- [9. What I'd Do With More Time](#9-what-id-do-with-more-time)
+
 ## Live Demo
 
-This is currently deployed and running on AWS ECS Fargate:
+Running on AWS ECS Fargate:
 
 **http://modernfi-alb-1883adc-1363646707.us-west-2.elb.amazonaws.com**
 
@@ -16,26 +29,24 @@ curl -X POST http://modernfi-alb-1883adc-1363646707.us-west-2.elb.amazonaws.com/
 curl "http://modernfi-alb-1883adc-1363646707.us-west-2.elb.amazonaws.com/history?limit=5"
 ```
 
-Note: this is running on a personal/sandbox AWS account and may be torn down
-(`pulumi destroy`) after review to stop incurring cost — see [Deploying to
-AWS](#5-deploying-to-aws) to stand it back up if the link above is down.
+This runs on a personal AWS account and may get torn down (`pulumi destroy`)
+after review. See [Deploying to AWS](#5-deploying-to-aws) to stand it back up
+if the link is dead.
 
-Also note: the deployed instance uses my own personal Anthropic and FRED API
-credentials, so usage against the live demo draws on my own API
-quota/billing. I don't have auto-reload enabled, so if credits run out,
-`/ask` will return a `503` with a "temporarily unavailable" message rather
-than failing silently — `/health` will still report healthy in that case,
-since it only checks the database connection. Please be considerate with
-request volume, or run the app locally with your own keys per the
-instructions below.
+The deployed instance uses my own Anthropic and FRED credentials, so usage
+against this URL draws on my own quota and billing. Auto-reload isn't
+enabled. If credits run out, `/ask` returns a `503` with a "temporarily
+unavailable" message instead of failing silently. `/health` still reports
+healthy in that case, since it only checks the database connection. Be
+considerate with request volume, or run the app locally with your own keys.
 
 ## 1. Overview
 
-An agentic service that answers natural-language questions about U.S. interest
-rates and economic indicators using live FRED (Federal Reserve Economic Data)
-data. Built with FastAPI and Claude's tool-use API, deployed on AWS ECS
-Fargate behind an Application Load Balancer, with Postgres (RDS) persisting a
-history of every question and answer.
+An agentic service that answers natural-language questions about U.S.
+interest rates and economic indicators, using live FRED (Federal Reserve
+Economic Data) data. Built with FastAPI and Claude's tool-use API. Deployed
+on AWS ECS Fargate behind an Application Load Balancer, with Postgres (RDS)
+persisting a history of every question and answer.
 
 ## 2. Architecture
 
@@ -65,41 +76,40 @@ history of every question and answer.
 
 **Request flow for `POST /ask`:**
 
-1. The user's question is sent to Claude along with two tool definitions:
+1. The user's question goes to Claude along with two tool definitions:
    `search_fred_series` and `get_fred_data`.
-2. For almost any in-scope question — current or historical — Claude calls
+2. For almost any in-scope question, current or historical, Claude calls
    `search_fred_series` first to resolve a plain-language question
-   ("30-year mortgage rate") to a FRED series ID (`MORTGAGE30US`); the
-   system prompt directs it to prefer live data over its own training
-   knowledge, since rates change often. The only cases that skip tool
-   calls entirely are questions clearly outside scope (e.g. off-topic
-   requests, which the system prompt directs Claude to decline and
-   redirect) or input too unclear to act on.
-3. Claude then calls `get_fred_data` with that series ID to fetch the actual
-   value — either the latest observation, or a historical range if the
-   question references a specific date/period.
-4. This repeats in a loop (Claude can chain multiple tool calls, and
-   sometimes calls several in parallel in one turn) until Claude has enough
-   information to answer in plain text.
-5. The exchange — question, answer, status, and operational metadata
-   (iteration count, tool calls made, duration) — is written to Postgres.
-6. The answer is returned to the user.
+   ("30-year mortgage rate") to a FRED series ID (`MORTGAGE30US`). The
+   system prompt tells it to prefer live data over its own training
+   knowledge, since rates change often. Tool calls get skipped only for
+   questions clearly outside scope (the system prompt directs Claude to
+   decline and redirect those) or input too unclear to act on.
+3. Claude then calls `get_fred_data` with that series ID to fetch the
+   actual value: the latest observation, or a historical range if the
+   question references a specific date or period.
+4. This repeats in a loop until Claude has enough information to answer in
+   plain text. It can chain multiple tool calls, sometimes several in
+   parallel in one turn.
+5. The exchange (question, answer, status, and operational metadata:
+   iteration count, tool calls made, duration) gets written to Postgres.
+6. The answer goes back to the user.
 
 **Components:**
 
-- **ALB (Application Load Balancer)** — the only publicly reachable piece.
+- **ALB (Application Load Balancer):** the only publicly reachable piece.
   Terminates inbound HTTP and forwards to whichever Fargate task(s) are
   healthy, using `/health` as the target group's health check path.
-- **ECS Fargate** — runs the FastAPI app as a container, with no EC2 servers
-  to patch or manage. Lives in a private subnet; the only way in is through
+- **ECS Fargate:** runs the FastAPI app as a container. No EC2 servers to
+  patch or manage. Lives in a private subnet; the only way in is through
   the ALB.
-- **Claude (Anthropic API)** — the agentic reasoning layer. Decides which
+- **Claude (Anthropic API):** the agentic reasoning layer. Decides which
   tools to call, in what order, and synthesizes the final natural-language
   answer.
-- **FRED API** — the actual data source for rates and economic indicators.
-- **RDS Postgres** — persists every `/ask` exchange for the `/history`
-  endpoint and for operational visibility (which questions are slow, which
-  fail, which tools get used most).
+- **FRED API:** the actual data source for rates and economic indicators.
+- **RDS Postgres:** persists every `/ask` exchange for the `/history`
+  endpoint, and for operational visibility: which questions are slow,
+  which fail, which tools get used most.
 
 **Project structure:**
 
@@ -114,6 +124,9 @@ modernfi-rate-agent/
 │   └── models.py          # Pydantic request/response models
 ├── infra/
 │   └── __main__.py         # Pulumi program (VPC, RDS, ECS/Fargate, ALB, secrets)
+├── .github/workflows/
+│   ├── pulumi-preview.yml  # pulumi preview on every PR
+│   └── pulumi-deploy.yml   # pulumi up on merge to main
 ├── init_db/
 │   └── 001_create_tables.sql
 ├── test_agent.py           # manual smoke-test script (see §8)
@@ -123,133 +136,131 @@ modernfi-rate-agent/
 └── README.md
 ```
 
-The app is deliberately split by concern rather than left as one file:
-`main.py` is pure HTTP routing and delegates everything else out, `agent.py`
-owns the Claude interaction and tool-use loop, `tools.py` is the schema
-"contract" Claude sees, `fred.py` is a plain HTTP client with zero framework
-dependencies (easy to unit test in isolation), and `db.py` owns the
-Postgres connection lifecycle and queries. Each piece is independently
-readable and testable without needing to load the rest of the app.
+Split by concern rather than left as one file. `main.py` is pure HTTP
+routing and delegates everything else out. `agent.py` owns the Claude
+interaction and tool-use loop. `tools.py` is the schema "contract" Claude
+sees. `fred.py` is a plain HTTP client with zero framework dependencies,
+easy to unit test in isolation. `db.py` owns the Postgres connection
+lifecycle and queries. Each piece is independently readable and testable
+without loading the rest of the app.
 
 ## 3. Decisions & Tradeoffs
 
-**Python / FastAPI.** Matches ModernFi's existing stack, so this should feel
-like something a teammate already wrote rather than a foreign artifact.
-FastAPI is async-native, which matters here — the agent loop spends most of
-its wall-clock time waiting on network I/O (Claude, FRED, Postgres), and
-`async`/`await` lets the event loop handle other requests during those waits
-instead of blocking a thread per request. Concretely: `agent.py` uses
-Anthropic's async client (`AsyncAnthropic`) and `fred.py` uses
-`httpx.AsyncClient`, so a slow Claude or FRED call never blocks other
-in-flight requests — like a concurrent `/ask` or an ALB `/health` poll — on
-the same worker. Auto-generated OpenAPI docs at `/docs` are a free
-byproduct, useful for anyone exploring the API without reading this README
-first.
+**Python / FastAPI.** Matches ModernFi's existing stack. This should feel
+like something a teammate already wrote, not a foreign artifact. FastAPI
+is async-native, which matters here: the agent loop spends most of its
+wall-clock time waiting on network I/O (Claude, FRED, Postgres), and
+`async`/`await` lets the event loop handle other requests during those
+waits instead of blocking a thread per request. Concretely, `agent.py`
+uses Anthropic's async client (`AsyncAnthropic`) and `fred.py` uses
+`httpx.AsyncClient`. A slow Claude or FRED call never blocks other
+in-flight requests on the same worker: a concurrent `/ask`, say, or an ALB
+`/health` poll. Auto-generated OpenAPI docs at `/docs` are a free
+byproduct, useful for anyone exploring the API without reading this
+README first.
 
-**FRED API over scraping treasury.gov or the Fed's site.** FRED is a clean,
-documented, stable REST API maintained specifically for this kind of
-programmatic access — search endpoint, observations endpoint, consistent
-JSON shape, no HTML to parse or break when a page redesign ships. Scraping
-would be more brittle (breaks on any front-end change), slower to build
-correctly, and arguably against the spirit of what those sites are for.
-FRED exists precisely so this problem doesn't need scraping.
+**FRED API over scraping treasury.gov or the Fed's site.** FRED is a
+clean, documented, stable REST API built for exactly this kind of
+programmatic access: a search endpoint, an observations endpoint,
+consistent JSON, no HTML to parse or break when a page redesign ships.
+Scraping would be more brittle (it breaks on any front-end change), slower
+to build correctly, and arguably against the spirit of what those sites
+are for. FRED exists precisely so this problem doesn't need scraping.
 
-**Claude tool use as the agentic layer, with a two-tool
-(search → fetch) design.** A single "get me rate X" tool would require the
-caller (or a hardcoded mapping) to already know FRED's exact series IDs,
-which defeats the purpose of a natural-language interface. Splitting into
-`search_fred_series` (resolve a plain-language question to a series ID) and
-`get_fred_data` (fetch the actual values, current or historical) mirrors how
-a human would actually do this task — look it up, then pull the number —
-and lets Claude chain the two tools autonomously, including in parallel when
-a question needs several series at once (e.g. "what are current interest
-rates" fans out to mortgage, fed funds, and treasury yields in one turn).
+**Claude tool use as the agentic layer, with a two-tool (search → fetch)
+design.** A single "get me rate X" tool would require the caller, or a
+hardcoded mapping, to already know FRED's exact series IDs, defeating the
+point of a natural-language interface. Splitting into `search_fred_series`
+(resolve a plain-language question to a series ID) and `get_fred_data`
+(fetch the actual values, current or historical) mirrors how a person
+would do this by hand: look it up, then pull the number. It also lets
+Claude chain the two tools autonomously, including in parallel when a
+question needs several series at once: "what are current interest rates"
+fans out to mortgage, fed funds, and treasury yields in one turn.
 
 **Claude Haiku 4.5 as the model, injected via config rather than
-hardcoded.** This service's actual reasoning load is narrow — parse a
-question, decide which of two tools to call (if any), and turn a numeric
-FRED observation into a plain-English sentence. That's tool selection and
-light synthesis, not open-ended reasoning, so a smaller, faster, cheaper
+hardcoded.** This service's actual reasoning load is narrow: parse a
+question, decide which of two tools to call, turn a numeric FRED
+observation into a plain-English sentence. That's tool selection and
+light synthesis, not open-ended reasoning. A smaller, faster, cheaper
 model handles it reliably once the tool descriptions and system prompt do
-the heavy lifting. It matters more here than usual because each `/ask` call
-can cost 2–3 sequential Claude round trips (search → fetch → answer) —
-Haiku's lower per-token cost and lower latency compound across that whole
-loop, directly improving both the observed 5–12s response time and the
-per-request dollar cost of a service where every call is billed API usage.
-The model string is never hardcoded in application code: `agent.py` reads
-it from `os.environ["ANTHROPIC_MODEL"]` once, at import time, into a
-module-level constant — not per-request — which is set locally via `.env`
-and in production via a plain Pulumi config value (`anthropicModel`)
-injected as a task-definition environment variable, not a secret, since a
-model name isn't sensitive. Reading it once at startup rather than on every
-call also means a missing/misconfigured `ANTHROPIC_MODEL` fails loudly when
-the container starts, instead of surfacing as an unhandled `500` on
-whichever request happens to hit `/ask` first. Swapping models (a newer
-Haiku point release, or dialing up to Sonnet if accuracy on harder
-questions became a priority) is still just a one-line `pulumi config set
-anthropicModel <model>` + `pulumi up`, with no application code change and
-no new Docker image to build.
+the heavy lifting. It matters more here than usual too: each `/ask` call
+can cost 2 to 3 sequential Claude round trips (search, fetch, answer), and
+Haiku's lower per-token cost and latency compound across that whole loop.
+Given the 5 to 12 second response times this service actually sees,
+that's a real difference, not a rounding error.
 
-**Postgres over SQLite.** SQLite would have been faster to stand up locally
-and technically sufficient for a single-table take-home. Postgres is what
-you'd actually reach for in production — proper concurrent write handling,
-a real network-accessible service that RDS can host managed and highly
-available, native `JSONB` and `TIMESTAMPTZ` types that fit this schema
-cleanly. Using SQLite here would have meant re-doing this decision the
-moment this went from take-home to real service; Postgres front-loads that.
+The model string is never hardcoded. `agent.py` reads it from
+`os.environ["ANTHROPIC_MODEL"]` once, at import time, into a module-level
+constant, not per request. Locally it's set via `.env`; in production, via
+a plain Pulumi config value (`anthropicModel`) injected as a
+task-definition environment variable, not a secret, since a model name
+isn't sensitive. Reading it once at startup rather than on every call
+means a missing or misconfigured `ANTHROPIC_MODEL` fails loudly when the
+container starts, instead of surfacing as an unhandled `500` on whichever
+request happens to hit `/ask` first. Swapping models (a newer Haiku point
+release, or dialing up to Sonnet if harder questions start needing it) is
+still just a `pulumi config set anthropicModel <model>` and a `pulumi up`.
+No code change, no new Docker image.
+
+**Postgres over SQLite.** SQLite would have been faster to stand up
+locally, and technically sufficient for a single-table take-home. But
+Postgres is what you'd actually reach for in production: proper
+concurrent write handling, a real network-accessible service RDS can host
+managed and highly available, native `JSONB` and `TIMESTAMPTZ` types that
+fit this schema cleanly. Using SQLite here would have meant re-deciding
+this the moment the project went from take-home to real service. Postgres
+front-loads that decision.
 
 **`asyncpg` directly over an ORM (SQLAlchemy, etc.).** This service has
-exactly one table and a small, fixed set of queries (one insert, one
-paginated select). An ORM's value is managing complexity across many
-tables, relationships, and evolving query patterns — none of which apply
+exactly one table and a small, fixed set of queries: one insert, one
+paginated select. An ORM's value is managing complexity across many
+tables, relationships, and evolving query patterns, none of which apply
 here. Raw SQL via `asyncpg` is faster (no ORM translation layer), more
-transparent (the query you read is the query that runs), and there's simply
-less machinery to misconfigure for a schema this small. This is a
-deliberate trade, not a default — a service with more than a couple of
-tables or complex joins would push me back toward an ORM or query builder.
+transparent (the query you read is the query that runs), and there's less
+machinery to misconfigure for a schema this small. This is a deliberate
+trade, not a default. A service with more than a couple of tables, or any
+real joins, would push me back toward an ORM or query builder.
 
-**ECS Fargate over EKS (or raw EC2).** This is a single containerized
-service with one moving part to run — Fargate is the right-sized tool.
-Kubernetes/EKS brings real power (custom scheduling, complex multi-service
-topologies, a large ecosystem) but also real operational overhead — cluster
-upgrades, node group management, a control plane to reason about — none of
-which this service needs yet. Fargate gives "run this container, don't make
-me manage servers" with a much smaller surface area, and migrating to
-EKS later, if the platform actually grows into needing it, is a real but
-tractable path — not something this decision forecloses.
+**ECS Fargate over EKS (or raw EC2).** A single containerized service with
+one moving part to run. Fargate is the right-sized tool for that.
+Kubernetes/EKS brings custom scheduling, complex multi-service
+topologies, a large ecosystem, plus cluster upgrades, node group
+management, and a control plane to reason about: none of it needed yet.
+Fargate gives "run this container, don't make me manage servers" with a
+much smaller surface area. Migrating to EKS later, if the platform grows
+into needing it, is tractable. This decision doesn't foreclose it.
 
 **Pulumi over Terraform/CloudFormation/hand-written YAML.** Infrastructure
-as actual code (Python here) means real control flow, real functions, real
-type-checking (as some of the debugging in this project's history shows —
-Pylance caught real API mismatches before they became `pulumi up` failures).
-It also means this infra can share tooling and conventions with the
-application code itself, rather than living in a separate declarative
-dialect. The tradeoff: Pulumi's Python SDK surface is less
-exhaustively-documented in places than Terraform's, and its `Output`/`apply`
-model for handling values not known until deploy time has a real learning
-curve — worth it here for the payoff of writing infra in the same language
-as the app.
+as actual code (Python, here) means control flow, functions, and a type
+checker in the loop instead of a separate declarative dialect the editor
+can't reason about. It also means this infra shares tooling and
+conventions with the application code. The tradeoff: Pulumi's Python SDK
+surface is less exhaustively documented than Terraform's in places, and
+its `Output`/`apply` model for handling values not known until deploy
+time takes some getting used to. Worth it here for writing infra in the
+same language as the app.
 
 **Secrets Manager for API keys and the database URL, not plaintext
 environment variables.** ECS task definitions are visible in the console
-and API to anyone with read access to the account; a plaintext
+and API to anyone with read access to the account. A plaintext
 `environment` block puts secrets in that blast radius. The task
 definition's `secrets` field instead stores an ARN pointing at Secrets
-Manager, and ECS resolves the actual value only at container start —
-the secret itself never appears in the task definition JSON. Locally,
-the same secrets live in a gitignored `.env` file rather than in code or
-Docker Compose directly, for the same reason at a smaller scale.
+Manager, and ECS resolves the actual value only at container start. The
+secret itself never appears in the task definition JSON. Locally, the
+same secrets live in a gitignored `.env` file rather than in code or
+Docker Compose directly, for the same reason at smaller scale.
 
 **No prompt caching (for now).** Anthropic's prompt caching keys off a
-prefix (`tools` → `system` → `messages`) and would in principle fit
+prefix (`tools` → `system` → `messages`), and would in principle fit
 `agent.py`'s tool-use loop, which resends the same system prompt and tool
 schemas on every iteration. It's skipped here because the combined
-`SYSTEM_PROMPT` + tool schemas come to roughly 600-700 tokens, well under
-Haiku 4.5's 2048-token minimum cacheable prefix — a `cache_control` marker
-below that minimum is a silent no-op (no error, `cache_read_input_tokens`
-just stays 0), so adding it today wouldn't do anything. It'd be worth
-revisiting if the tool set or system prompt grows significantly, or if the
-model changes to one with a lower minimum (Sonnet's is 1024 tokens).
+`SYSTEM_PROMPT` and tool schemas come to roughly 600 to 700 tokens, well
+under Haiku 4.5's 2048-token minimum cacheable prefix. A `cache_control`
+marker below that minimum is a silent no-op: no error,
+`cache_read_input_tokens` just stays at 0. So adding it today wouldn't do
+anything. Worth revisiting if the tool set or system prompt grows, or if
+the model changes to one with a lower minimum (Sonnet's is 1024 tokens).
 
 ## 4. Running Locally
 
@@ -336,8 +347,8 @@ curl -X POST http://localhost:8000/ask \
    pulumi config set anthropicModel claude-haiku-4-5-20251001
    ```
 
-3. Preview the plan (no changes are made — this just shows what *would*
-   be created):
+3. Preview the plan. No changes are made; this just shows what *would* be
+   created:
    ```bash
    pulumi preview
    ```
@@ -349,7 +360,7 @@ curl -X POST http://localhost:8000/ask \
    This provisions, in order: a VPC, an ECS cluster, an ECR repo (and
    builds/pushes the app image into it), RDS Postgres, Secrets Manager
    entries for each credential, an ALB, and the Fargate service itself.
-   Expect this to take several minutes — RDS and the ALB are the slowest
+   Expect this to take several minutes. RDS and the ALB are the slowest
    pieces to come up.
 
 5. Get the public URL:
@@ -368,61 +379,62 @@ pulumi destroy
 
 ## 6. Continuous Deployment (GitHub Actions)
 
-Two workflows in `.github/workflows/` automate what Section 5 above
-describes doing by hand:
+Two workflows in `.github/workflows/` automate what Section 5 describes
+doing by hand. Both are live on this repo now, not just aspirational.
 
-- **`pulumi-preview.yml`** — runs `pulumi preview` on every PR against
-  `main` and comments the plan directly on the PR. Uses a **read-only**
-  IAM role (`AmazonReadOnlyAccess`-equivalent) assumable from *any*
-  branch/PR in this repo — safe to run against an untrusted contribution,
-  since it can plan but never apply anything. A branch protection rule on
-  `main` (set up below) additionally makes this job's status a **required
-  check** — a PR can't be merged while `pulumi preview` is failing.
-- **`pulumi-deploy.yml`** — runs `pulumi up` automatically on every push to
-  `main` (i.e. every merge). Uses a **full-access** IAM role that's only
-  assumable from a workflow run whose ref is exactly `refs/heads/main` — a
-  PR branch can never assume it, regardless of what the workflow file on
-  that branch says. The job declares `environment: production`, which
-  pauses it for a manual approval click if a required reviewer is
-  configured on that environment (set up below) — this repo is public, so
-  that feature is available (it isn't on a private repo on the Free plan,
-  which is what this repo used to be before going public).
+`pulumi-preview.yml` runs `pulumi preview` on every PR against `main` and
+comments the plan directly on the PR. It uses a read-only IAM role
+(`ReadOnlyAccess`-equivalent) assumable from any branch or PR in this
+repo. Safe to run against an untrusted contribution, since it can plan
+but never apply anything. A branch protection rule on `main` makes this
+job's status a required check: a PR can't merge while `pulumi preview` is
+failing.
 
-**Why OIDC instead of storing AWS access keys as GitHub secrets:** both
-roles are assumed via GitHub's OIDC identity federation
-(`infra/__main__.py`'s `github_oidc_provider` + the two
-`github_actions_*_role` resources) — GitHub mints a short-lived,
-per-workflow-run token, and AWS trusts it based on the token's `sub` claim
-(which branch/PR it came from) rather than a long-lived credential sitting
-in GitHub's secret store waiting to leak or need rotation.
+`pulumi-deploy.yml` runs `pulumi up` automatically on every push to
+`main`, every merge. It uses a full-access IAM role, and the job declares
+`environment: production`, which pauses it for a manual approval click if
+a required reviewer is configured on that environment. Required reviewers
+on environments needs a public repo, or GitHub Team/Enterprise for a
+private one. This repo is public specifically so that gate works.
+
+Both roles are assumed through GitHub's OIDC identity federation rather
+than long-lived AWS access keys sitting in GitHub secrets. GitHub mints a
+short-lived, per-workflow-run token; AWS trusts it based on claims baked
+into that token (which repo, which branch or environment) instead of a
+static credential that has to be rotated and can leak. The preview role's
+trust condition matches on the repo and branch; the deploy role's matches
+on the repo and the `production` environment name specifically, since
+that job declares `environment: production` and GitHub scopes the token's
+claims to the environment once a job attaches one.
 
 ### One-time setup
 
-This is bootstrapping — a few of these steps need real AWS/GitHub
-credentials and can't be done by `pulumi up` alone, since CI can't create
-the very trust role it needs to authenticate in the first place.
+This is what it took to bootstrap this repo's pipeline, kept here as the
+runbook for doing it again: from a fork, or a fresh AWS account. A few of
+these steps need real AWS/GitHub credentials and can't be done by
+`pulumi up` alone, since CI can't create the very trust role it needs to
+authenticate in the first place.
 
-1. **Move the Pulumi backend off your laptop.** This project currently
-   uses a local file backend (`file://~`), which a GitHub Actions runner
-   can't reach. Sign up at [app.pulumi.com](https://app.pulumi.com), then:
+1. **Move the Pulumi backend off your laptop.** A local file backend
+   (`file://~`) isn't reachable from a GitHub Actions runner. Sign up at
+   [app.pulumi.com](https://app.pulumi.com), then:
    ```bash
    cd infra
    pulumi stack export --file /tmp/dev-state.json   # back up current state first
-   pulumi login                                      # switches to Pulumi Cloud
+   pulumi login https://api.pulumi.com               # explicit backend URL
    pulumi stack init dev                              # or select if it already exists
    pulumi stack import --file /tmp/dev-state.json
    ```
 2. **Switch the secrets provider to Pulumi Cloud's managed encryption.**
-   The stack's secrets are currently passphrase-encrypted
-   (`PULUMI_CONFIG_PASSPHRASE`), which CI would otherwise also need as a
-   secret. Converting removes that extra credential entirely:
+   A passphrase-encrypted stack (`PULUMI_CONFIG_PASSPHRASE`) would need
+   that passphrase as a CI secret too. Converting removes that credential
+   entirely:
    ```bash
    pulumi stack change-secrets-provider "default"   # prompts for the passphrase once
    ```
 3. **Apply the new OIDC provider and IAM roles.** With your existing local
-   AWS credentials still configured, run one more `pulumi up` to actually
-   create `github_oidc_provider` and the two roles added in
-   `infra/__main__.py`:
+   AWS credentials still configured, run one more `pulumi up` to create
+   `github_oidc_provider` and the two roles added in `infra/__main__.py`:
    ```bash
    pulumi up
    ```
@@ -437,16 +449,15 @@ the very trust role it needs to authenticate in the first place.
 5. **Configure the GitHub repo** (Settings → Secrets and variables →
    Actions):
    - **Secrets:** `PULUMI_ACCESS_TOKEN`
-   - **Variables:** `AWS_PREVIEW_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` (note:
-     GitHub rejects any secret/variable name starting with `GITHUB_` — it's
-     a reserved prefix for GitHub's own built-in variables), and
-     `PULUMI_STACK` (e.g. `your-pulumi-org/modernfi-rate-agent/dev`)
+   - **Variables:** `AWS_PREVIEW_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` (GitHub
+     rejects any secret/variable name starting with `GITHUB_`, reserved
+     for GitHub's own built-in variables), and `PULUMI_STACK` (e.g.
+     `your-pulumi-org/modernfi-rate-agent/dev`)
 6. **Create the approval gate** (Settings → Environments → New
-   environment, name it `production` — matching the `environment:
-   production` key on the deploy job — then **Required reviewers** → add
-   yourself → Save protection rules). This repo is public, so this option
-   is actually available; it wasn't while the repo was private on the Free
-   plan.
+   environment, name it `production`, matching the `environment:
+   production` key on the deploy job, then **Required reviewers** → add
+   yourself → Save protection rules). Needs a public repo, or GitHub
+   Team/Enterprise for a private one.
 7. **Require the preview check before merging.** GitHub only lets you
    select a status check once it's actually run at least once, so first
    open any PR and let `pulumi-preview.yml` run on it. Then: Settings →
@@ -454,10 +465,9 @@ the very trust role it needs to authenticate in the first place.
    **Require status checks to pass before merging** → search for and
    select `preview` (the job name in `pulumi-preview.yml`) → Save.
 
-After this: every PR against `main` must have a passing `pulumi preview`
-before it can be merged at all, and every merge to `main` automatically
-kicks off `pulumi up` — pausing for your approval click first — with no
-AWS keys ever stored in GitHub.
+End state: every PR against `main` needs a passing `pulumi preview` before
+it can merge, and every merge to `main` kicks off `pulumi up`, pausing
+for an approval click first, with no AWS keys ever stored in GitHub.
 
 ## 7. API Reference
 
@@ -483,7 +493,7 @@ Returns past `/ask` exchanges, most recent first.
 **Query parameters:**
 | Param    | Type | Default | Notes                      |
 |----------|------|---------|----------------------------|
-| `limit`  | int  | 20      | 1–100                      |
+| `limit`  | int  | 20      | 1 to 100                   |
 | `offset` | int  | 0       | for pagination             |
 
 **Response:** array of records, each containing `id`, `question`, `answer`,
@@ -494,12 +504,12 @@ Returns past `/ask` exchanges, most recent first.
 Liveness/readiness check used by the ALB target group. Runs an actual query
 against Postgres rather than just confirming the process is up.
 
-**Response (healthy):** `{"status": "healthy", "database": "connected"}` — `200`
-**Response (unhealthy):** `{"status": "unhealthy", ...}` — `503`
+**Healthy:** HTTP `200`, `{"status": "healthy", "database": "connected"}`
+**Unhealthy:** HTTP `503`, `{"status": "unhealthy", ...}`
 
 ## 8. Manual Sanity Testing
 
-`test_agent.py` (project root) is a small manual smoke-test script — not a
+`test_agent.py` (project root) is a small manual smoke-test script, not a
 unit test suite, just a quick way to eyeball that the whole stack is
 behaving after a change. Run it with the app up (`docker compose up` or a
 live deploy, pointing `BASE_URL` at whichever):
@@ -510,36 +520,37 @@ python test_agent.py
 
 It runs, in order:
 
-1. **`/health`** — confirms the app and its Postgres connection are actually
-   up before bothering to test anything else.
-2. **`/ask`** — a fixed set of test questions covering specific rates
+1. **`/health`**: confirms the app and its Postgres connection are
+   actually up before bothering to test anything else.
+2. **`/ask`**: a fixed set of test questions covering specific rates
    ("30-year mortgage rate"), vague/broad questions ("are rates high right
    now"), and edge cases (empty string, nonsense input, an off-topic
    question, a historical date lookup). Prints status code, timing, and
    the response body for each.
-3. **`/history`** — three checks:
-   - Fetches the most recent rows and prints one, so you can eyeball that
+3. **`/history`**: three checks.
+   - **Basic fetch:** prints the most recent rows so you can eyeball that
      a real `/ask` call actually got persisted with sane fields.
-   - **Pagination check**: confirms `offset=0` and `offset=5` return
+   - **Pagination check:** confirms `offset=0` and `offset=5` return
      non-overlapping `id`s.
-   - **Row-count check**: confirms the total row count is at least the
-     number of questions this run just sent — if it's lower, that's a
+   - **Row-count check:** confirms the total row count is at least the
+     number of questions this run just sent. If it's lower, that's a
      signal `save_query` may be silently failing to persist (its
      try/except swallows DB errors on purpose so a logging failure never
      breaks a user's `/ask` response, which means this script is the
      backstop that would actually catch that failure mode).
-   - **Validation check**: confirms `/history?limit=0` and
+   - **Validation check:** confirms `/history?limit=0` and
      `/history?limit=101` both return `422`, not `200` or `500`.
-4. **Summary** — a compact ✅/❌ table of every `/ask` test case with
+4. **Summary**: a compact ✅/❌ table of every `/ask` test case with
    status code and timing, plus a flag for anything that took over 10
    seconds (worth checking server logs for the per-iteration/per-tool
    breakdown on any flagged question).
 
-This isn't a substitute for the real unit/integration tests listed below —
-it doesn't run in CI and doesn't assert anything strictly (it prints
-warnings, it doesn't fail loudly) — but it's what was actually used
-throughout development to catch regressions like the parallel-tool-call
-bug and the empty-string 500 described earlier in this README's history.
+This isn't a substitute for the real unit/integration tests listed below.
+It doesn't run in CI, and it doesn't assert anything strictly. It prints
+warnings; it doesn't fail loudly. It's a fast way to catch the failure
+modes that matter most here: a multi-tool-call turn wired incorrectly,
+edge-case input (empty strings, off-topic questions, reversed date
+ranges) producing a `500` instead of a clean response.
 
 `test_error_handling.py` (project root) exercises the one failure path
 `test_agent.py` can't reach without manual intervention: what happens when
@@ -560,7 +571,7 @@ then runs the same checks as `test_agent.py --error-handling` (confirms
 `/ask` returns `503`, confirms the most recent `/history` row shows
 `status='error'`, confirms `/health` is still `200`). A `finally` block
 always restores your real `.env` and recreates the container again
-afterward — even on a failed assertion or a Ctrl+C partway through — so a
+afterward, even on a failed assertion or a Ctrl+C partway through, so a
 run can't accidentally leave your local app stuck on a fake key. Like
 `test_agent.py`, this requires the app already running via `docker compose`
 (it assumes a service named `app` in `docker-compose.yml` and a `.env` in
@@ -573,11 +584,11 @@ the current directory) and isn't wired into CI.
   integration test that runs the full `/ask` loop against a mocked Claude
   response to verify the multi-tool-call and `tool_result` wiring without
   needing live API credentials in CI. The `pulumi-preview.yml` workflow
-  (see §6) has nowhere to run these yet, since none exist — once written,
+  (see §6) has nowhere to run these yet, since none exist. Once written,
   they'd slot in as a step before `pulumi preview` in that same workflow.
-- **HTTPS.** ACM certificate + a Route 53 domain in front of the ALB, with
-  an HTTPS listener redirecting from port 80. Currently plain HTTP, which
-  is fine for a take-home demo but not for anything real.
+- **HTTPS.** ACM certificate plus a Route 53 domain in front of the ALB,
+  with an HTTPS listener redirecting from port 80. Currently plain HTTP,
+  which is fine for a take-home demo but not for anything real.
 - **Rate limiting.** Nothing currently stops one client from hammering
   `/ask` (each call costs real money in Claude + FRED API usage). Even a
   simple token-bucket per-IP limiter would close that gap.
@@ -590,23 +601,23 @@ the current directory) and isn't wired into CI.
 - **Caching frequent FRED queries.** Rates like the federal funds rate
   don't change every minute; a short-TTL cache (in-process or Redis) in
   front of `get_fred_data`/`search_fred_series` would cut latency and FRED
-  API usage for repeat questions, which given the observed 5–12s response
-  times would meaningfully improve perceived speed for common queries.
+  API usage for repeat questions: a real improvement given the observed
+  5 to 12 second response times for common queries.
 - **Real migration tooling (Alembic).** The current `CREATE TABLE IF NOT
   EXISTS` approach is intentionally simple and self-bootstrapping, but it
-  can't evolve an existing schema — adding a column later would require a
+  can't evolve an existing schema. Adding a column later would require a
   manual `ALTER TABLE` outside this code path. It also isn't fully
-  race-safe under concurrent startups — two ECS tasks launching at the same
+  race-safe under concurrent startups: two ECS tasks launching at the same
   instant (e.g. during a `desired_count > 1` deploy) could both attempt the
   DDL simultaneously. Neither is a problem yet at `desired_count=1`, but
   Alembic (or similar) would give a proper versioned migration history and
   remove both issues before scaling out.
 - **Multi-environment support.** Right now there's a single Pulumi stack
-  (`dev`). A `staging`/`prod` split — via `Pulumi.staging.yaml` /
-  `Pulumi.prod.yaml` with per-stack config (instance sizes, secrets) —
+  (`dev`). A `staging`/`prod` split, via `Pulumi.staging.yaml` /
+  `Pulumi.prod.yaml` with per-stack config (instance sizes, secrets),
   would be the natural next step before this served real traffic.
 - **ALFRED (vintage/point-in-time data) support.** FRED only ever returns
-  the latest revised value for a series — but many economic indicators
+  the latest revised value for a series, but many economic indicators
   (unemployment, GDP, CPI) get revised after their initial release. FRED's
   sibling API, ALFRED (ArchivaL Federal Reserve Economic Data), exposes the
   data *as it was originally published* at any given point in time. This
@@ -618,11 +629,12 @@ the current directory) and isn't wired into CI.
   Claude distinguish between these when a question calls for it, and would
   be a natural, on-brand extension for a service already built around FRED.
 - **Hardcoded shortcuts for common series.** `search_fred_series` costs a
-  full Claude + HTTP round trip even for well-known, static IDs — "what's
-  the fed funds rate" doesn't need a search when `FEDFUNDS` never changes.
-  A small map of ~10–20 common terms → series IDs, with `search_fred_series`
-  as the fallback for anything not in the map, would cut a full round trip
-  off the most common questions without giving up the general-purpose case.
+  full Claude + HTTP round trip even for well-known, static IDs.
+  "What's the fed funds rate" doesn't need a search when `FEDFUNDS` never
+  changes. A small map of roughly 10 to 20 common terms → series IDs, with
+  `search_fred_series` as the fallback for anything not in the map, would
+  cut a full round trip off the most common questions without giving up
+  the general-purpose case.
 - **Concurrent tool execution within a turn.** When Claude requests
   multiple tools in one turn (e.g. "what are current interest rates"
   fanning out to several series), `agent.py` still `await`s them one at a
@@ -637,8 +649,8 @@ the current directory) and isn't wired into CI.
   leaving it to inference.
 - **Persisting `response.stop_reason`.** Today, `max_tokens` (a truncated
   answer) and `refusal` (a declined answer) both fall through the same
-  code path as a clean `end_turn` and get recorded as `status="success"` —
-  there's no way to tell them apart later via `/history`. Storing the
+  code path as a clean `end_turn` and get recorded as `status="success"`.
+  There's no way to tell them apart later via `/history`. Storing the
   actual `stop_reason` on the final iteration would make that distinction
   queryable.
 - **ECS redundancy.** `desired_count=1` and a single NAT gateway
@@ -648,24 +660,24 @@ the current directory) and isn't wired into CI.
   moving to a per-AZ NAT strategy would be the next steps before this
   served real traffic.
 - **SSM Parameter Store instead of Secrets Manager.** None of the three
-  secrets here use Secrets Manager's automatic rotation — its main
+  secrets here use Secrets Manager's automatic rotation, its main
   differentiator and cost driver over the alternative. SSM Parameter Store
   `SecureString` parameters give the same "never in plaintext in the task
   definition" property at no additional per-secret cost for anything that
   isn't being rotated.
 - **Auth on `/ask` itself.** There's currently no authentication in front
-  of `/ask` — anyone who can reach the ALB can trigger a real, billed
+  of `/ask`. Anyone who can reach the ALB can trigger a real, billed
   Claude + FRED call. An API key (even a simple shared-secret header
   checked in `main.py`) would close this gap before rate limiting alone
-  would — rate limiting slows down abuse, it doesn't require the caller to
+  would: rate limiting slows down abuse, it doesn't require the caller to
   be authorized at all.
 - **Streaming responses.** Claude's Messages API supports server-sent-event
-  streaming; given the observed 5–12s response times, streaming partial
-  text back to the caller as it's generated (rather than waiting for the
-  entire multi-iteration loop to finish) would meaningfully improve
-  perceived latency even though total time wouldn't change.
+  streaming. Given the observed 5 to 12 second response times, streaming
+  partial text back to the caller as it's generated, rather than waiting
+  for the entire multi-iteration loop to finish, would improve perceived
+  latency even though total time wouldn't change.
 - **Multi-turn conversations.** Every `/ask` today starts a brand-new,
-  memoryless conversation — there's no way to ask a natural follow-up
+  memoryless conversation. There's no way to ask a natural follow-up
   ("what about the 15-year rate?") without repeating the whole question.
   Supporting this would mean accepting an optional conversation/session ID,
   persisting the growing `messages` list per session in Postgres instead of
@@ -674,6 +686,6 @@ the current directory) and isn't wired into CI.
 - **Retry/backoff on FRED calls.** `fred.py` gives up after a single
   attempt on a timeout or 5xx and returns an error straight to Claude. A
   transient network blip currently degrades all the way to "I couldn't
-  retrieve that" instead of a quick, cheap retry — a short exponential
-  backoff (2–3 attempts) before falling back to the current error-as-data
-  behavior would absorb most of those blips.
+  retrieve that" instead of a quick, cheap retry. A short exponential
+  backoff (2 to 3 attempts) before falling back to the current
+  error-as-data behavior would absorb most of those blips.

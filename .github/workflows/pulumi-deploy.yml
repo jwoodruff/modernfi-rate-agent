@@ -1,18 +1,26 @@
 name: Pulumi Deploy
 
 # Runs automatically on every push to main (i.e. every merge). Uses the
-# full-access IAM role, which is only assumable from a workflow run whose
-# ref is exactly `refs/heads/main` — a PR branch can never assume it,
-# regardless of what the workflow file on that branch says. The
-# `environment: production` gate below pauses this job for a manual
+# full-access IAM role, which is only assumable from a workflow run
+# targeting the `production` GitHub environment — a PR branch can never
+# assume it, regardless of what the workflow file on that branch says.
+# The `environment: production` gate below pauses this job for a manual
 # approval click if a required reviewer is configured on that environment
-# (Settings → Environments → production → Required reviewers) — available
-# now that this repo is public; it was not available while private on the
-# Free plan.
+# (Settings → Environments → production → Required reviewers). Required
+# reviewers needs a public repo, or GitHub Team/Enterprise for a private
+# one.
 
 on:
   push:
     branches: [main]
+
+# One deploy against this stack at a time, queued in order rather than
+# canceled — an in-progress `pulumi up` shouldn't get killed mid-apply,
+# since that can leave infrastructure partially changed. Same group key on
+# every run (there's only one stack), so a second merge landing while the
+# first is still deploying waits for it instead of running concurrently.
+concurrency:
+  group: pulumi-deploy-${{ vars.PULUMI_STACK }}
 
 permissions:
   id-token: write # required to mint the OIDC token for AWS

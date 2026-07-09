@@ -8,6 +8,14 @@ on:
   pull_request:
     branches: [main]
 
+# Only the latest push on a PR branch needs a preview. Runs sharing this
+# group key (one per PR branch) cancel any older, still-running or queued
+# run in that same group the moment a new one starts, so pushing three
+# commits in a row leaves just one preview running, not three queued.
+concurrency:
+  group: pulumi-preview-${{ github.head_ref }}
+  cancel-in-progress: true
+
 permissions:
   id-token: write # required to mint the OIDC token for AWS
   contents: read

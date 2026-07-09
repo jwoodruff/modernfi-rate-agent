@@ -329,12 +329,11 @@ fargate_service = awsx.ecs.FargateService(
 #     `production` GitHub environment, full access (`AdministratorAccess`
 #     — reasonable for this personal/sandbox account; a shared/production
 #     account should scope this down to the specific services this stack
-#     actually manages). Scoped on `environment:production`, not
-#     `ref:refs/heads/main`, because a job that declares `environment:` has
-#     its OIDC token's `sub` claim replaced with the environment name
-#     instead of the branch ref — matching on the ref here would silently
-#     never match once the job has an environment attached, exactly the
-#     bug this comment used to describe before it was caught.
+#     actually manages). Scoped on `environment:production` rather than
+#     `ref:refs/heads/main` because the deploy job declares `environment:`
+#     — GitHub replaces the branch ref in the OIDC token's `sub` claim
+#     with the environment name once a job attaches one, so the trust
+#     condition has to match on the environment to work at all.
 # ---------------------------------------------------------------------------
 github_repo = "jwoodruff/modernfi-rate-agent"
 
