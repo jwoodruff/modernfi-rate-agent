@@ -315,9 +315,93 @@ fargate_service = awsx.ecs.FargateService(
 )
 
 # ---------------------------------------------------------------------------
+# GitHub Actions OIDC — lets CI authenticate to AWS without storing any
+# long-lived access keys as GitHub secrets. GitHub mints a short-lived,
+# per-workflow-run identity token; AWS trusts it via this OIDC provider and
+# hands out temporary credentials scoped to whichever role the token's
+# claims are allowed to assume.
+#
+# Two roles, deliberately split by blast radius:
+#   - preview role: assumable from ANY branch/PR in this repo, read-only
+#     (`ReadOnlyAccess`) — safe to run on untrusted PRs, since it can plan
+#     but never change anything.
+#   - deploy role: assumable ONLY from a workflow run whose ref is exactly
+#     `refs/heads/main` (i.e. only after a merge), full access
+#     (`AdministratorAccess` — reasonable for this personal/sandbox
+#     account; a shared/production account should scope this down to the
+#     specific services this stack actually manages).
+# ---------------------------------------------------------------------------
+github_repo = "jwoodruff/modernfi-rate-agent"
+
+github_oidc_provider = aws.iam.OpenIdConnectProvider(
+    "github-actions-oidc",
+    url="https://token.actions.githubusercontent.com",
+    client_id_lists=["sts.amazonaws.com"],
+    # GitHub's well-known OIDC token-signing certificate thumbprint. AWS
+    # validates GitHub's provider against its own trusted CA bundle
+    # regardless of what's set here, but the field is still required at
+    # creation time.
+    thumbprint_lists=["6938fd4d98bab03faadb97b34396831e3780aea1"],
+)
+
+
+def _github_oidc_trust_policy(oidc_provider_arn: str, subject_pattern: str) -> str:
+    return json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Federated": oidc_provider_arn},
+                    "Action": "sts:AssumeRoleWithWebIdentity",
+                    "Condition": {
+                        "StringEquals": {
+                            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+                        },
+                        "StringLike": {
+                            "token.actions.githubusercontent.com:sub": subject_pattern
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+
+github_actions_preview_role = aws.iam.Role(
+    "github-actions-preview-role",
+    assume_role_policy=github_oidc_provider.arn.apply(
+        lambda arn: _github_oidc_trust_policy(arn, f"repo:{github_repo}:*")
+    ),
+)
+
+aws.iam.RolePolicyAttachment(
+    "github-actions-preview-role-readonly",
+    role=github_actions_preview_role.name,
+    policy_arn="arn:aws:iam::aws:policy/ReadOnlyAccess",
+)
+
+github_actions_deploy_role = aws.iam.Role(
+    "github-actions-deploy-role",
+    assume_role_policy=github_oidc_provider.arn.apply(
+        lambda arn: _github_oidc_trust_policy(
+            arn, f"repo:{github_repo}:ref:refs/heads/main"
+        )
+    ),
+)
+
+aws.iam.RolePolicyAttachment(
+    "github-actions-deploy-role-admin",
+    role=github_actions_deploy_role.name,
+    policy_arn="arn:aws:iam::aws:policy/AdministratorAccess",
+)
+
+# ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
 pulumi.export("ecr_repository_url", ecr_repository.url)
 pulumi.export("ecr_image_uri", ecr_image.image_uri)
 pulumi.export("alb_url", alb.load_balancer.dns_name.apply(lambda dns: f"http://{dns}"))
 pulumi.export("rds_endpoint", rds_instance.endpoint)
+pulumi.export("github_actions_preview_role_arn", github_actions_preview_role.arn)
+pulumi.export("github_actions_deploy_role_arn", github_actions_deploy_role.arn)

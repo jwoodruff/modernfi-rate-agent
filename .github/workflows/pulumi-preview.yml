@@ -1,0 +1,46 @@
+name: Pulumi Preview
+
+# Runs on every PR targeting main. Uses a read-only IAM role assumable from
+# any branch/PR in this repo, so it's safe to run on untrusted contributions
+# — it can plan changes but can never apply them.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write # required to mint the OIDC token for AWS
+  contents: read
+  pull-requests: write # required for comment-on-pr
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements.txt
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
+          aws-region: us-west-2
+
+      - name: pulumi preview
+        uses: pulumi/actions@v7
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_STACK }}
+          work-dir: infra
+          comment-on-pr: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}

@@ -1,0 +1,50 @@
+name: Pulumi Deploy
+
+# Runs automatically on every push to main (i.e. every merge). Uses the
+# full-access IAM role, which is only assumable from a workflow run whose
+# ref is exactly `refs/heads/main` — a PR branch can never assume it,
+# regardless of what the workflow file on that branch says. The
+# `environment: production` gate below pauses this job for a manual
+# approval click if a required reviewer is configured on that environment
+# (Settings → Environments → production → Required reviewers) — available
+# now that this repo is public; it was not available while private on the
+# Free plan.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write # required to mint the OIDC token for AWS
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements.txt
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-west-2
+
+      - name: pulumi up
+        uses: pulumi/actions@v7
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_STACK }}
+          work-dir: infra
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}

@@ -116,8 +116,8 @@ modernfi-rate-agent/
 │   └── __main__.py         # Pulumi program (VPC, RDS, ECS/Fargate, ALB, secrets)
 ├── init_db/
 │   └── 001_create_tables.sql
-├── test_agent.py           # manual smoke-test script (see §7)
-├── test_error_handling.py  # manual API-failure drill (see §7)
+├── test_agent.py           # manual smoke-test script (see §8)
+├── test_error_handling.py  # manual API-failure drill (see §8)
 ├── Dockerfile
 ├── docker-compose.yml
 └── README.md
@@ -366,7 +366,100 @@ To tear everything down (stop paying for it):
 pulumi destroy
 ```
 
-## 6. API Reference
+## 6. Continuous Deployment (GitHub Actions)
+
+Two workflows in `.github/workflows/` automate what Section 5 above
+describes doing by hand:
+
+- **`pulumi-preview.yml`** — runs `pulumi preview` on every PR against
+  `main` and comments the plan directly on the PR. Uses a **read-only**
+  IAM role (`AmazonReadOnlyAccess`-equivalent) assumable from *any*
+  branch/PR in this repo — safe to run against an untrusted contribution,
+  since it can plan but never apply anything. A branch protection rule on
+  `main` (set up below) additionally makes this job's status a **required
+  check** — a PR can't be merged while `pulumi preview` is failing.
+- **`pulumi-deploy.yml`** — runs `pulumi up` automatically on every push to
+  `main` (i.e. every merge). Uses a **full-access** IAM role that's only
+  assumable from a workflow run whose ref is exactly `refs/heads/main` — a
+  PR branch can never assume it, regardless of what the workflow file on
+  that branch says. The job declares `environment: production`, which
+  pauses it for a manual approval click if a required reviewer is
+  configured on that environment (set up below) — this repo is public, so
+  that feature is available (it isn't on a private repo on the Free plan,
+  which is what this repo used to be before going public).
+
+**Why OIDC instead of storing AWS access keys as GitHub secrets:** both
+roles are assumed via GitHub's OIDC identity federation
+(`infra/__main__.py`'s `github_oidc_provider` + the two
+`github_actions_*_role` resources) — GitHub mints a short-lived,
+per-workflow-run token, and AWS trusts it based on the token's `sub` claim
+(which branch/PR it came from) rather than a long-lived credential sitting
+in GitHub's secret store waiting to leak or need rotation.
+
+### One-time setup
+
+This is bootstrapping — a few of these steps need real AWS/GitHub
+credentials and can't be done by `pulumi up` alone, since CI can't create
+the very trust role it needs to authenticate in the first place.
+
+1. **Move the Pulumi backend off your laptop.** This project currently
+   uses a local file backend (`file://~`), which a GitHub Actions runner
+   can't reach. Sign up at [app.pulumi.com](https://app.pulumi.com), then:
+   ```bash
+   cd infra
+   pulumi stack export --file /tmp/dev-state.json   # back up current state first
+   pulumi login                                      # switches to Pulumi Cloud
+   pulumi stack init dev                              # or select if it already exists
+   pulumi stack import --file /tmp/dev-state.json
+   ```
+2. **Switch the secrets provider to Pulumi Cloud's managed encryption.**
+   The stack's secrets are currently passphrase-encrypted
+   (`PULUMI_CONFIG_PASSPHRASE`), which CI would otherwise also need as a
+   secret. Converting removes that extra credential entirely:
+   ```bash
+   pulumi stack change-secrets-provider "default"   # prompts for the passphrase once
+   ```
+3. **Apply the new OIDC provider and IAM roles.** With your existing local
+   AWS credentials still configured, run one more `pulumi up` to actually
+   create `github_oidc_provider` and the two roles added in
+   `infra/__main__.py`:
+   ```bash
+   pulumi up
+   ```
+4. **Collect the values GitHub Actions needs:**
+   ```bash
+   pulumi stack output github_actions_preview_role_arn
+   pulumi stack output github_actions_deploy_role_arn
+   pulumi whoami                       # your Pulumi Cloud org/username
+   ```
+   Generate a Pulumi access token from Pulumi Cloud under **Settings →
+   Access Tokens**.
+5. **Configure the GitHub repo** (Settings → Secrets and variables →
+   Actions):
+   - **Secrets:** `PULUMI_ACCESS_TOKEN`
+   - **Variables:** `AWS_PREVIEW_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` (note:
+     GitHub rejects any secret/variable name starting with `GITHUB_` — it's
+     a reserved prefix for GitHub's own built-in variables), and
+     `PULUMI_STACK` (e.g. `your-pulumi-org/modernfi-rate-agent/dev`)
+6. **Create the approval gate** (Settings → Environments → New
+   environment, name it `production` — matching the `environment:
+   production` key on the deploy job — then **Required reviewers** → add
+   yourself → Save protection rules). This repo is public, so this option
+   is actually available; it wasn't while the repo was private on the Free
+   plan.
+7. **Require the preview check before merging.** GitHub only lets you
+   select a status check once it's actually run at least once, so first
+   open any PR and let `pulumi-preview.yml` run on it. Then: Settings →
+   Branches → Add branch protection rule → branch name pattern `main` →
+   **Require status checks to pass before merging** → search for and
+   select `preview` (the job name in `pulumi-preview.yml`) → Save.
+
+After this: every PR against `main` must have a passing `pulumi preview`
+before it can be merged at all, and every merge to `main` automatically
+kicks off `pulumi up` — pausing for your approval click first — with no
+AWS keys ever stored in GitHub.
+
+## 7. API Reference
 
 ### `POST /ask`
 Ask a natural-language question about interest rates or economic indicators.
@@ -404,7 +497,7 @@ against Postgres rather than just confirming the process is up.
 **Response (healthy):** `{"status": "healthy", "database": "connected"}` — `200`
 **Response (unhealthy):** `{"status": "unhealthy", ...}` — `503`
 
-## 7. Manual Sanity Testing
+## 8. Manual Sanity Testing
 
 `test_agent.py` (project root) is a small manual smoke-test script — not a
 unit test suite, just a quick way to eyeball that the whole stack is
@@ -473,19 +566,18 @@ run can't accidentally leave your local app stuck on a fake key. Like
 (it assumes a service named `app` in `docker-compose.yml` and a `.env` in
 the current directory) and isn't wired into CI.
 
-## 8. What I'd Do With More Time
+## 9. What I'd Do With More Time
 
 - **Tests.** Unit tests for `call_tool`'s dispatch/validation logic and the
   FRED functions' error paths (timeout, bad series ID, empty results); an
   integration test that runs the full `/ask` loop against a mocked Claude
   response to verify the multi-tool-call and `tool_result` wiring without
-  needing live API credentials in CI.
+  needing live API credentials in CI. The `pulumi-preview.yml` workflow
+  (see §6) has nowhere to run these yet, since none exist — once written,
+  they'd slot in as a step before `pulumi preview` in that same workflow.
 - **HTTPS.** ACM certificate + a Route 53 domain in front of the ALB, with
   an HTTPS listener redirecting from port 80. Currently plain HTTP, which
   is fine for a take-home demo but not for anything real.
-- **CI/CD.** GitHub Actions running tests and `pulumi preview` on every PR,
-  with `pulumi up` gated behind a manual approval or merge-to-main for
-  actual deploys — rather than deploying by hand from a laptop.
 - **Rate limiting.** Nothing currently stops one client from hammering
   `/ask` (each call costs real money in Claude + FRED API usage). Even a
   simple token-bucket per-IP limiter would close that gap.
